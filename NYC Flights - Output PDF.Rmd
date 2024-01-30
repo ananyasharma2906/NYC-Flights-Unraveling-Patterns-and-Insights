@@ -1,0 +1,219 @@
+---
+title: "NYC Flights: Unraveling Patterns and Insights"
+author: "Ananya Sharma"
+date: "1/29/2024"
+output: pdf_document
+---
+The assignment involves exploring and analyzing the 'nycflights13' dataset in R to derive insights and visualizations related to various aspects of flight data. Tasks include creating scatterplots, investigating delays, analyzing air time, identifying top destinations, and examining the potential causes of flight delays, among other exploratory analyses. The overarching goal is to gain a comprehensive understanding of the dataset and draw meaningful conclusions from the data.
+
+1. Using the nycflights13 dataset, create a scatterplot with vertical point ranges depicting the relationship between the 'cut' of diamonds and their 'depth'. 
+
+```{r}
+library(nycflights13)
+library(ggplot2)
+options(max.print = 50)
+
+
+ggplot(data = diamonds, aes(x = cut, y = depth)) +
+geom_pointrange(stat = "summary",
+fun.min = min,
+fun.max = max,
+fun = median)
+```
+Q2. In our proportion bar chart, we need to set group = 1. Why? In other words, what is the problem with these two graphs?
+```{r}
+ggplot(diamonds, aes(x = cut, y = after_stat(prop))) +
+geom_bar()
+```
+
+```{r}
+{ggplot(diamonds, aes(x = cut, fill = color, y = after_stat(prop))) +
+geom_bar()}
+```
+
+
+By not including it, we have made all the bars in our plot the same height (1). So the problem is that the proportions are done within cut groups, and therefore it is not very useful for analysis.
+
+Q3. Delays are typically temporally correlated: even once the problem that caused the initial delay has been resolved, later flights are delayed to allow earlier flights to leave.
+
+a. Order flights by departing airport, arrival airport, month, day, and scheduled departure time. For each flight, use lag() and group_by() to compute the delay on the previous flight – if there is such a flight on the same day.
+
+```{r}
+library(dplyr)
+
+prev_delay <- flights |>
+group_by(origin, dest, month, day) |>
+arrange(sched_dep_time) |>
+mutate(preceding_delay = lag(arr_delay)) |>
+filter(!is.na(preceding_delay))
+prev_delay |> head(5)
+```
+Q4. Make a plot which shows the relationship between a flight’s delay and the delay of the immediately preceding scheduled flight. You have a lot of data, so think carefully about how to develop a plot which is not too cluttered.
+
+```{r}
+ggplot(prev_delay) +
+geom_smooth(aes(x = preceding_delay, y = arr_delay)) +
+xlab("Arrival delay time (preceding flight)") +
+ylab("Arrival delay time (own flight)")
+```
+Q5. Now we will look at delays that occur in the air. We will need a sense of how long a flight is. Compute the air time for each flight relative to the median flight to that destination. Which 10 flights were most delayed in the air?
+
+```{r}
+med_dest <- flights |>
+group_by(dest) |>
+mutate(median_time = median(air_time, na.rm = TRUE),
+diff_from_median_time = air_time - median_time)
+med_dest |>
+arrange(desc(diff_from_median_time)) |>
+select(origin, dest, diff_from_median_time, air_time, median_time) |>
+head(10)
+```
+
+Q6. For each plane, count the number of flights before the first delay of greater than 1 hour. Construct a Boolean variable for every flight which measures whether it had a delay of greater than 1 hour and then use cumsum. 
+
+```{r}
+flights <- flights |>
+group_by(tailnum) |>
+arrange(time_hour) |>
+mutate(delay_gt_hour = arr_delay > 60,
+before_delay = cumsum(delay_gt_hour))
+flights |>
+filter(before_delay < 1) |>
+summarize(n = n()) |>
+arrange(desc(n))
+```
+Q7. Reverse engineer the source of flight delays.
+- Divide the flights day up into 48 hour windows. Which three two-day windows have the worst delays? Please separate out arrival and departure delays.
+- Divide weather into 48-hour windows. Cross-reference the three two-day windows which have the worst delays
+- Does it seem like the delays were due to bad weather, or something else? If it was due to something else, what seems logical?
+
+```{r}
+library(lubridate)
+
+flights <- nycflights13::flights
+flights2 <- flights |>
+mutate(two_day_period = round_date(time_hour, "2 days")) |>
+group_by(time_hour, two_day_period)
+consecutive_48 <- flights2 |>
+summarize(mean_arr_delay = mean(arr_delay), mean_dep_delay = mean(dep_delay))
+consecutive_48[is.na(consecutive_48)] <- 0
+consecutive_48 <- consecutive_48 |>
+group_by(two_day_period) |>
+summarize(mean_2day_arrdelay = mean(mean_arr_delay), mean_2day_depdelay = mean(mean_dep_delay))
+consecutive_48 |> arrange(desc(mean_2day_arrdelay)) |> head(3)
+consecutive_48 |> arrange(desc(mean_2day_depdelay)) |> head(3)
+weather <- nycflights13::weather
+weather2 <- weather |>
+mutate(two_day_period = round_date(time_hour, "2 days")) |>
+group_by(time_hour, two_day_period)
+weather_48 <- weather2 |>
+summarize(mean_wind_dir = mean(wind_dir), mean_wind_gust = mean(wind_gust),
+mean_precip = mean(precip))
+combined_48 <- consecutive_48 |> left_join(weather_48)
+```
+July 2nd-3rd, December 22-23, and April 22-23 had the worst 2 day arrival delays. July 2nd-3rd, December
+22-23, and May 24-25 had the worst 2 day departure delays.
+
+```{r}
+flights <- nycflights13::flights
+flights2 <- flights |>
+mutate(two_day_period = floor_date(time_hour, "2 days")) |>
+group_by(time_hour, two_day_period)
+consecutive_48 <- flights2 |>
+summarize(mean_arr_delay = mean(arr_delay), mean_dep_delay = mean(dep_delay))
+```
+
+```{r}
+consecutive_48[is.na(consecutive_48)] <- 0
+consecutive_48 <- consecutive_48 |>
+group_by(two_day_period) |>
+summarize(mean_2day_arrdelay = mean(mean_arr_delay), mean_2day_depdelay = mean(mean_dep_delay))
+consecutive_48 |> arrange(desc(mean_2day_arrdelay)) |> head(3)
+```
+```{r}
+consecutive_48 |> arrange(desc(mean_2day_depdelay)) |> head(3)
+```
+
+Q8. Does every departing flight have corresponding weather data for that hour?
+```{r}
+weather_flights <- flights |> select(time_hour, origin)|>
+left_join(weather) |>
+group_by(time_hour)
+```
+Answer: No
+
+Q9. What do the tail numbers that don’t have a matching record in planes have in common? 
+
+```{r}
+flights |> select(-year) |>
+anti_join(planes) |>
+count(carrier, sort = TRUE)
+```
+
+```{r}
+flights |> select(-year) |>
+left_join(planes) |>
+group_by(carrier) |>
+summarise(prop_missing = mean(is.na(manufacturer))) |>
+arrange(desc(prop_missing))
+```
+Q10. Is each plane flown by a single airline?
+```{r}
+flights |>
+distinct(carrier, tailnum) |>
+count(tailnum) |>
+filter(n > 1)
+```
+
+Q11. Add the location (i.e. the lat and lon) of the origin and destination to the flights data frame.
+
+```{r}
+airports <- nycflights13::airports
+airports_short <- airports |> select(faa, lat, lon)
+flights %>%
+left_join(airports_short, by = c('origin' = 'faa')) |>
+left_join(
+airports_short,
+by = c('dest' = 'faa'),
+suffix = c('_origin', 'dest')
+) |>
+select(ends_with('origin'), ends_with('dest'), everything())
+```
+
+Q12. Use the following code to calculate average delay by destination, then join on the airportsdata frame so you can show the spatial distribution of delays.
+avg_delays_by_dest <- flights %>%
+group_by(dest) %>%
+summarize(avg_delay = mean(arr_delay, na.rm = TRUE))
+
+```{r}
+library(maps) #package to display map using ggplot
+flight_plot <- flights %>%
+group_by(dest) %>%
+summarise(avg_del = mean(arr_delay, na.rm = TRUE)) %>%
+left_join(airports, c("dest" = "faa"))
+ggplot(flight_plot, aes(lon, lat)) +
+geom_point(size = flight_plot$avg_del / 5) +
+borders("state") +
+coord_quickmap() +
+xlim(-125, -68) +
+ylim(25, 50) +
+labs(x = "",
+y = "",
+title = "Airport locations and size of destination delays are longer in the east coast")
+```
+
+Q13. What happened on June 13 2013? Draw a map of the delays, and then use Google to cross-reference with the weather.
+
+```{r}
+worst <- filter(flights, !is.na(dep_time), month == 6, day == 13)
+worst |>
+group_by(dest) |>
+summarize(delay = mean(arr_delay), n = n()) |>
+filter(n > 5) |>
+inner_join(airports, by = c("dest" = "faa")) |>
+ggplot(aes(x = lon, y = lat)) +
+borders("state") +
+geom_point(aes(size = n, color = delay)) +
+coord_quickmap()
+```
+
